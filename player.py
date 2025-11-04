@@ -1,143 +1,196 @@
-"""
-player.py
-Clase Player para el jugador controlable
-Implementa herencia de Character y añade control de usuario y restricciones
-"""
-
 import pygame
 import os
-from character import Character
-from constants import (
-    CHARACTER_SCALE, MOVEMENT_SPEED,
-    SIDEWALK_TOP, SIDEWALK_BOTTOM, 
-    SIDEWALK_LEFT, SIDEWALK_RIGHT
-)
+import re
+from settings import PLAYER_SIZE_MULTIPLIER
 
+class Player(pygame.sprite.Sprite):
+    def __init__(self, pos):
+        super().__init__()
+        
+        # Propiedades básicas
+        self.pos = pygame.Vector2(pos)
+        self.velocity = pygame.Vector2(0, 0)
+        self.on_ground = False
+        
+        # HP
+        self.hp = 100
+        self.hp_max = 100
+        
+        # Sprites
+        self.frames = []
+        self.current_frame = 0
+        self.animation_speed = 0.15
+        self.frame_timer = 0
+        self.sprite_mode = "walk"
+        self.damage_timer = 0
+        
+        # Cargar sprites de caminata
+        self.load_walk_sprites()
+        
+        # Sprite actual
+        self.image = self.frames[0] if self.frames else pygame.Surface((40, 60))
+        self.rect = self.image.get_rect(center=pos)
+        
+        print(f"✓ Otto creado en posición {pos}")
 
-class Player(Character):
-    """
-    Clase del jugador principal con controles de teclado y restricciones de movimiento.
-    Hereda de Character y añade funcionalidad específica del jugador.
-    Demuestra polimorfismo al sobrescribir métodos de la clase padre.
-    """
+    def load_walk_sprites(self):
+        """Carga sprites de caminata - IGUAL QUE HOHEN"""
+        sprite_dir = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "assets", "sprites", "otto"
+        )
+        
+        self.frames = []
+        if os.path.exists(sprite_dir):
+            try:
+                # Buscar archivos frame_*.png O numerados como Hohen
+                frame_files = [f for f in sorted(os.listdir(sprite_dir), key=lambda x: self._sort_key(x))
+                              if (f.startswith("frame_") or (f[0].isdigit())) and f.endswith(".png")]
+                
+                print(f"📂 Encontrados {len(frame_files)} archivos en {sprite_dir}")
+                
+                for filename in frame_files:
+                    frame_path = os.path.join(sprite_dir, filename)
+                    try:
+                        frame_img = pygame.image.load(frame_path).convert_alpha()
+                        
+                        # Escalar - MISMO SISTEMA QUE HOHEN
+                        original_height = frame_img.get_height()
+                        target_height = int(original_height * PLAYER_SIZE_MULTIPLIER)
+                        scale_factor = target_height / original_height if original_height > 0 else 1
+                        new_width = int(frame_img.get_width() * scale_factor)
+                        
+                        frame_img = pygame.transform.scale(frame_img, (new_width, target_height))
+                        self.frames.append(frame_img)
+                        print(f"  ✓ Sprite cargado: {filename}")
+                    except Exception as e:
+                        print(f"  ❌ Error cargando {filename}: {e}")
+                
+                if not self.frames:
+                    print("⚠️ No se cargaron sprites, usando placeholder")
+                    self.frames = [pygame.Surface((40, 60))]
+                else:
+                    print(f"✓ {len(self.frames)} sprites de caminata cargados")
+            except Exception as e:
+                print(f"❌ Error: {e}")
+                self.frames = [pygame.Surface((40, 60))]
+        else:
+            print(f"❌ Carpeta no encontrada: {sprite_dir}")
+            self.frames = [pygame.Surface((40, 60))]
 
-    def __init__(self, x, y, frames_folder):
-        """
-        Constructor del jugador.
+    def load_fight_sprites(self):
+        """Carga sprites de pelea - IGUAL QUE HOHEN"""
+        sprite_dir = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "assets", "sprites", "otto_fight"
+        )
+        
+        fight_frames = []
+        if os.path.exists(sprite_dir):
+            try:
+                # Buscar todos los archivos PNG
+                fight_files = [f for f in sorted(os.listdir(sprite_dir), key=lambda x: self._sort_key(x))
+                              if f.endswith(".png")]
+                
+                print(f"📂 Encontrados {len(fight_files)} sprites de pelea")
+                
+                for filename in fight_files:
+                    # Saltar golpeado.png y standby.png (solo fight*)
+                    if filename.lower() in ["golpeado.png", "standby.png"]:
+                        continue
+                    
+                    frame_path = os.path.join(sprite_dir, filename)
+                    try:
+                        frame_img = pygame.image.load(frame_path).convert_alpha()
+                        
+                        # Escalar - MISMO SISTEMA QUE HOHEN
+                        original_height = frame_img.get_height()
+                        target_height = int(original_height * PLAYER_SIZE_MULTIPLIER)
+                        scale_factor = target_height / original_height if original_height > 0 else 1
+                        new_width = int(frame_img.get_width() * scale_factor)
+                        
+                        frame_img = pygame.transform.scale(frame_img, (new_width, target_height))
+                        fight_frames.append(frame_img)
+                        print(f"  ✓ Sprite de pelea: {filename}")
+                    except Exception as e:
+                        print(f"  ❌ Error: {e}")
+                
+                if fight_frames:
+                    self.frames = fight_frames
+                    print(f"✓ {len(self.frames)} sprites de pelea cargados")
+            except Exception as e:
+                print(f"❌ Error en load_fight_sprites: {e}")
+        else:
+            print(f"❌ Carpeta no encontrada: {sprite_dir}")
 
-        Args:
-            x (float): Posición inicial en el eje X
-            y (float): Posición inicial en el eje Y
-            frames_folder (str): Ruta a la carpeta con los frames de animación
-        """
-        super().__init__(x, y, frames_folder)
-        self.load_animations()
-        self.boundaries = {
-            "top": SIDEWALK_TOP,
-            "bottom": SIDEWALK_BOTTOM,
-            "left": SIDEWALK_LEFT,
-            "right": SIDEWALK_RIGHT
-        }
+    def load_damage_sprite(self):
+        """Carga sprite de daño"""
+        sprite_dir = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "assets", "sprites", "otto_fight"
+        )
+        
+        damage_path = os.path.join(sprite_dir, "golpeado.png")
+        if os.path.exists(damage_path):
+            try:
+                damage_img = pygame.image.load(damage_path).convert_alpha()
+                
+                original_height = damage_img.get_height()
+                target_height = int(original_height * PLAYER_SIZE_MULTIPLIER)
+                scale_factor = target_height / original_height if original_height > 0 else 1
+                new_width = int(damage_img.get_width() * scale_factor)
+                
+                damage_img = pygame.transform.scale(damage_img, (new_width, target_height))
+                self.frames = [damage_img]
+                print("✓ Sprite de daño cargado")
+            except Exception as e:
+                print(f"❌ Error: {e}")
 
-    def load_animations(self):
-        """
-        Carga todos los frames de animación del jugador desde la carpeta.
-        Redimensiona cada frame según CHARACTER_SCALE.
-        Implementa el método abstracto de Character.
-        """
-        try:
-            # Cargar los 16 frames de animación
-            for i in range(1, 17):
-                frame_path = os.path.join(self.frames_folder, f"frame_{i:02d}.png")
+    def _sort_key(self, filename):
+        """Ordena archivos numéricos correctamente"""
+        match = re.match(r'(\d+)', filename)
+        if match:
+            return int(match.group(1))
+        return float('inf')
 
-                # Cargar imagen con transparencia
-                frame = pygame.image.load(frame_path).convert_alpha()
+    def set_damage_mode(self, duration=0.5):
+        """Activa modo de daño"""
+        self.load_damage_sprite()
+        self.sprite_mode = "damage"
+        self.damage_timer = duration
+        print("💔 Otto golpeado")
 
-                # Redimensionar el frame según la escala configurada
-                original_size = frame.get_size()
-                new_size = (
-                    int(original_size[0] * CHARACTER_SCALE), 
-                    int(original_size[1] * CHARACTER_SCALE)
-                )
-                frame = pygame.transform.scale(frame, new_size)
+    def update(self, dt):
+        """Actualiza el jugador"""
+        keys = pygame.key.get_pressed()
+        self.velocity.x = 0
+        
+        if keys[pygame.K_a]:
+            self.velocity.x = -150
+        elif keys[pygame.K_d]:
+            self.velocity.x = 150
+        
+        self.pos.x += self.velocity.x * dt
+        self.pos.y += self.velocity.y * dt
+        
+        self.velocity.y += 1000 * dt
+        
+        # Actualizar tiempo de daño
+        if self.sprite_mode == "damage":
+            self.damage_timer -= dt
+            if self.damage_timer <= 0:
+                self.sprite_mode = "walk"
+                self.load_walk_sprites()
+                self.current_frame = 0
+        
+        # Actualizar animación
+        self.frame_timer += dt
+        if self.frame_timer >= self.animation_speed:
+            self.current_frame = (self.current_frame + 1) % len(self.frames)
+            self.image = self.frames[self.current_frame]
+            self.frame_timer = 0
+        
+        # self.rect.center = self.pos.x
 
-                self.frames.append(frame)
-
-            # Establecer sprite inicial (pose frontal)
-            if len(self.frames) > 5:
-                self.sprite = self.frames[5]  # Frame 6 - pose frontal
-                self.rect = self.sprite.get_rect(center=(self.x, self.y))
-
-            print(f"✓ {len(self.frames)} frames de animación cargados")
-
-        except Exception as e:
-            print(f"✗ Error cargando animaciones: {e}")
-
-    def handle_input(self, keys):
-        """
-        Maneja la entrada del teclado para controlar al jugador.
-        Método específico de Player (polimorfismo).
-
-        Args:
-            keys (pygame.key.ScancodeWrapper): Estado actual de las teclas
-        """
-        # Resetear velocidades
-        self.velocity_x = 0
-        self.velocity_y = 0
-        self.is_moving = False
-
-        # Movimiento horizontal
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            self.velocity_x = -MOVEMENT_SPEED
-            self.direction = "left"
-            self.is_moving = True
-
-        elif keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            self.velocity_x = MOVEMENT_SPEED
-            self.direction = "right"
-            self.is_moving = True
-
-        # Movimiento vertical (solo en el andén)
-        if keys[pygame.K_UP] or keys[pygame.K_w]:
-            self.velocity_y = -MOVEMENT_SPEED
-            self.is_moving = True
-
-        elif keys[pygame.K_DOWN] or keys[pygame.K_s]:
-            self.velocity_y = MOVEMENT_SPEED
-            self.is_moving = True
-
-    def apply_boundaries(self):
-        """
-        Aplica las restricciones de movimiento para mantener al jugador en el andén.
-        Evita que el jugador salga de los límites establecidos.
-        """
-        # Restricción horizontal
-        if self.x < self.boundaries["left"]:
-            self.x = self.boundaries["left"]
-        elif self.x > self.boundaries["right"]:
-            self.x = self.boundaries["right"]
-
-        # Restricción vertical (andén)
-        if self.y < self.boundaries["top"]:
-            self.y = self.boundaries["top"]
-        elif self.y > self.boundaries["bottom"]:
-            self.y = self.boundaries["bottom"]
-
-    def update(self):
-        """
-        Actualiza la posición y animación del jugador cada frame.
-        Sobrescribe el método de Character (polimorfismo).
-        """
-        # Aplicar velocidad a la posición
-        self.x += self.velocity_x
-        self.y += self.velocity_y
-
-        # Aplicar restricciones de movimiento
-        self.apply_boundaries()
-
-        # Actualizar animación (método heredado de Character)
-        self.animate()
-
-        # Actualizar rect para colisiones y dibujo
-        if self.rect:
-            self.rect.center = (self.x, self.y)
+    def draw(self, surface):
+        surface.blit(self.image, self.rect)
